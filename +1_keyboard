@@ -1,0 +1,1172 @@
+-- RIVO HUB - Fixed & Enhanced
+-- Key: kairon-script
+-- Discord: https://discord.gg/wfSAuayQr
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local Lighting = game:GetService("Lighting")
+local CoreGui = game:GetService("CoreGui")
+local VirtualUser = pcall(function() return game:GetService("VirtualUser") end) and game:GetService("VirtualUser") or nil
+local LP = Players.LocalPlayer
+
+local VALID_KEY = "kairon-script"
+local DISCORD = "https://discord.gg/wfSAuayQr"
+
+local state = {
+    walkSpeed = 16,
+    jumpPower = 50,
+    noclipConn = nil,
+    flyConn = nil,
+    flyBV = nil,
+    flyGyro = nil,
+    infJumpConn = nil,
+    antiAfkConn = nil,
+    toggleConn = nil,
+    charAddedConn = nil,
+    espObjects = {},
+    espConnections = {},
+    sliderConnections = {},
+    lightingOriginal = {
+        Ambient = Lighting.Ambient,
+        OutdoorAmbient = Lighting.OutdoorAmbient,
+        Brightness = Lighting.Brightness,
+        GlobalShadows = Lighting.GlobalShadows,
+        FogEnd = Lighting.FogEnd,
+        FogStart = Lighting.FogStart,
+        Effects = {}
+    },
+    fullbrightOn = false,
+    removeFogOn = false,
+    noShadowsOn = false,
+}
+
+for _, effect in ipairs(Lighting:GetChildren()) do
+    if effect:IsA("PostEffect") and effect.Enabled ~= nil then
+        table.insert(state.lightingOriginal.Effects, {obj = effect, enabled = effect.Enabled})
+    end
+end
+
+local function GetHumanoid()
+    local c = LP.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetRoot()
+    local c = LP.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function Notify(title, text, dur)
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = dur or 3,
+        })
+    end)
+end
+
+local function ClearESP()
+    for _, v in ipairs(state.espObjects) do
+        pcall(v.Destroy, v)
+    end
+    state.espObjects = {}
+    for _, conn in ipairs(state.espConnections) do
+        pcall(conn.Disconnect, conn)
+    end
+    state.espConnections = {}
+end
+
+local function AddESP(adornee, color)
+    if not adornee or not adornee.Parent then return end
+    local h = Instance.new("Highlight")
+    h.Adornee = adornee
+    h.FillColor = color
+    h.OutlineColor = color
+    h.FillTransparency = 0.55
+    h.OutlineTransparency = 0
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.Parent = CoreGui
+    table.insert(state.espObjects, h)
+end
+
+local function StopFly()
+    if state.flyConn then
+        state.flyConn:Disconnect()
+        state.flyConn = nil
+    end
+    if state.flyBV then
+        pcall(state.flyBV.Destroy, state.flyBV)
+        state.flyBV = nil
+    end
+    if state.flyGyro then
+        pcall(state.flyGyro.Destroy, state.flyGyro)
+        state.flyGyro = nil
+    end
+end
+
+local function ResetLighting()
+    Lighting.Ambient = state.lightingOriginal.Ambient
+    Lighting.OutdoorAmbient = state.lightingOriginal.OutdoorAmbient
+    Lighting.Brightness = state.lightingOriginal.Brightness
+    Lighting.GlobalShadows = state.lightingOriginal.GlobalShadows
+    Lighting.FogEnd = state.lightingOriginal.FogEnd
+    Lighting.FogStart = state.lightingOriginal.FogStart
+    for _, data in ipairs(state.lightingOriginal.Effects) do
+        pcall(function() data.obj.Enabled = data.enabled end)
+    end
+end
+
+local function CleanupAll()
+    ClearESP()
+    StopFly()
+    if state.noclipConn then
+        state.noclipConn:Disconnect()
+        state.noclipConn = nil
+    end
+    if state.infJumpConn then
+        state.infJumpConn:Disconnect()
+        state.infJumpConn = nil
+    end
+    if state.antiAfkConn then
+        state.antiAfkConn:Disconnect()
+        state.antiAfkConn = nil
+    end
+    if state.toggleConn then
+        state.toggleConn:Disconnect()
+        state.toggleConn = nil
+    end
+    if state.charAddedConn then
+        state.charAddedConn:Disconnect()
+        state.charAddedConn = nil
+    end
+    for _, conn in ipairs(state.sliderConnections) do
+        pcall(conn.Disconnect, conn)
+    end
+    state.sliderConnections = {}
+    ResetLighting()
+    local h = GetHumanoid()
+    if h then
+        h.WalkSpeed = 16
+        h.JumpPower = 50
+    end
+    state.walkSpeed = 16
+    state.jumpPower = 50
+end
+
+local function Create(class, props, parent)
+    local obj = Instance.new(class)
+    for k, v in pairs(props) do
+        pcall(function() obj[k] = v end)
+    end
+    if parent then obj.Parent = parent end
+    return obj
+end
+
+local function Corner(r, parent)
+    return Create("UICorner", {CornerRadius = UDim.new(0, r or 6)}, parent)
+end
+
+local function Padding(t, b, l, r, parent)
+    local p = Instance.new("UIPadding")
+    p.PaddingTop = UDim.new(0, t or 0)
+    p.PaddingBottom = UDim.new(0, b or 0)
+    p.PaddingLeft = UDim.new(0, l or 0)
+    p.PaddingRight = UDim.new(0, r or 0)
+    p.Parent = parent
+    return p
+end
+
+local function ListLayout(dir, pad, parent)
+    return Create("UIListLayout", {
+        FillDirection = dir or Enum.FillDirection.Vertical,
+        Padding = UDim.new(0, pad or 5),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, parent)
+end
+
+local function Label(props, parent)
+    local l = Create("TextLabel", {
+        BackgroundTransparency = 1,
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        Font = Enum.Font.Gotham,
+        TextScaled = false,
+        TextSize = 13,
+        RichText = true,
+    }, parent)
+    for k, v in pairs(props) do
+        pcall(function() l[k] = v end)
+    end
+    return l
+end
+
+local function Frame(props, parent)
+    local f = Create("Frame", {
+        BackgroundColor3 = Color3.fromRGB(28, 28, 28),
+        BorderSizePixel = 0,
+    }, parent)
+    for k, v in pairs(props) do
+        pcall(function() f[k] = v end)
+    end
+    return f
+end
+
+local function Btn(props, parent, cb)
+    local b = Create("TextButton", {
+        BackgroundColor3 = Color3.fromRGB(35, 35, 35),
+        BorderSizePixel = 0,
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        AutoButtonColor = false,
+    }, parent)
+    for k, v in pairs(props) do
+        pcall(function() b[k] = v end)
+    end
+    if cb then
+        b.MouseButton1Click:Connect(cb)
+    end
+    local base = b.BackgroundColor3
+    b.MouseEnter:Connect(function()
+        b.BackgroundColor3 = Color3.new(
+            math.min(base.R + 0.08, 1),
+            math.min(base.G + 0.08, 1),
+            math.min(base.B + 0.08, 1)
+        )
+    end)
+    b.MouseLeave:Connect(function()
+        b.BackgroundColor3 = base
+    end)
+    return b
+end
+
+local ACCENT = Color3.fromRGB(0, 185, 95)
+local BG_DARK = Color3.fromRGB(15, 15, 15)
+local BG_MID = Color3.fromRGB(22, 22, 22)
+local BG_LIGHT = Color3.fromRGB(30, 30, 30)
+local BG_PANEL = Color3.fromRGB(18, 18, 18)
+
+local function ShowKeyGui(onSuccess)
+    local gui = Create("ScreenGui", {
+        Name = "RivoKey",
+        ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    }, LP:WaitForChild("PlayerGui"))
+
+    local bg = Frame({
+        Size = UDim2.new(0, 400, 0, 280),
+        Position = UDim2.new(0.5, -200, 0.5, -140),
+        BackgroundColor3 = BG_DARK,
+    }, gui)
+    Corner(10, bg)
+
+    local stripe = Frame({
+        Size = UDim2.new(1, 0, 0, 3),
+        Position = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = ACCENT,
+    }, bg)
+    Corner(2, stripe)
+
+    Label({
+        Size = UDim2.new(1, 0, 0, 40),
+        Position = UDim2.new(0, 0, 0, 14),
+        Text = "RIVO HUB",
+        Font = Enum.Font.GothamBlack,
+        TextSize = 22,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextXAlignment = Enum.TextXAlignment.Center,
+    }, bg)
+
+    Label({
+        Size = UDim2.new(1, 0, 0, 20),
+        Position = UDim2.new(0, 0, 0, 54),
+        Text = "Enter your access key to continue",
+        TextSize = 12,
+        TextColor3 = Color3.fromRGB(130, 130, 130),
+        TextXAlignment = Enum.TextXAlignment.Center,
+    }, bg)
+
+    local discBtn = Btn({
+        Size = UDim2.new(0.8, 0, 0, 36),
+        Position = UDim2.new(0.1, 0, 0, 86),
+        Text = "Get Key  —  Join Discord",
+        BackgroundColor3 = Color3.fromRGB(88, 101, 242),
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 13,
+    }, bg, function()
+        local cb = setclipboard or toclipboard or (rawget(_G, "set_clipboard"))
+        if cb then pcall(cb, DISCORD) end
+        Notify("Discord", "Link copied to clipboard!", 2)
+    end)
+    Corner(7, discBtn)
+
+    local box = Create("TextBox", {
+        Size = UDim2.new(0.8, 0, 0, 38),
+        Position = UDim2.new(0.1, 0, 0, 136),
+        BackgroundColor3 = Color3.fromRGB(32, 32, 32),
+        BorderSizePixel = 0,
+        PlaceholderText = "Paste key here...",
+        PlaceholderColor3 = Color3.fromRGB(90, 90, 90),
+        Text = "",
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        Font = Enum.Font.Gotham,
+        TextSize = 13,
+        ClearTextOnFocus = false,
+    }, bg)
+    Corner(7, box)
+
+    local errLbl = Label({
+        Size = UDim2.new(0.8, 0, 0, 18),
+        Position = UDim2.new(0.1, 0, 0, 184),
+        Text = "",
+        TextSize = 12,
+        TextColor3 = Color3.fromRGB(255, 80, 80),
+        TextXAlignment = Enum.TextXAlignment.Center,
+    }, bg)
+
+    local unlockBtn = Btn({
+        Size = UDim2.new(0.8, 0, 0, 40),
+        Position = UDim2.new(0.1, 0, 0, 210),
+        Text = "Unlock Hub",
+        BackgroundColor3 = ACCENT,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        Font = Enum.Font.GothamBold,
+        TextSize = 14,
+    }, bg)
+    Corner(7, unlockBtn)
+
+    local function tryUnlock()
+        local entered = box.Text:lower():gsub("%s+", "")
+        if entered == VALID_KEY then
+            gui:Destroy()
+            onSuccess()
+        else
+            errLbl.Text = "Invalid key. Try again."
+            task.delay(2.5, function()
+                if errLbl and errLbl.Parent then errLbl.Text = "" end
+            end)
+        end
+    end
+
+    unlockBtn.MouseButton1Click:Connect(tryUnlock)
+    box.FocusLost:Connect(function(enter)
+        if enter then tryUnlock() end
+    end)
+end
+
+local function CreateMainUI()
+    local gui = Create("ScreenGui", {
+        Name = "RivoMain",
+        ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        DisplayOrder = 100,
+    }, LP:WaitForChild("PlayerGui"))
+
+    local main = Frame({
+        Size = UDim2.new(0, 640, 0, 460),
+        Position = UDim2.new(0.5, -320, 0.5, -230),
+        BackgroundColor3 = BG_PANEL,
+        Active = true,
+    }, gui)
+    Corner(10, main)
+
+    local topBar = Frame({
+        Size = UDim2.new(1, 0, 0, 40),
+        Position = UDim2.new(0, 0, 0, 0),
+        BackgroundColor3 = BG_DARK,
+    }, main)
+    Corner(10, topBar)
+    Frame({
+        Size = UDim2.new(1, 0, 0, 10),
+        Position = UDim2.new(0, 0, 1, -10),
+        BackgroundColor3 = BG_DARK,
+    }, topBar)
+
+    local accentLine = Frame({
+        Size = UDim2.new(0, 3, 0, 22),
+        Position = UDim2.new(0, 12, 0.5, -11),
+        BackgroundColor3 = ACCENT,
+    }, topBar)
+    Corner(2, accentLine)
+
+    Label({
+        Size = UDim2.new(1, -120, 1, 0),
+        Position = UDim2.new(0, 22, 0, 0),
+        Text = "RIVO HUB",
+        Font = Enum.Font.GothamBlack,
+        TextSize = 15,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, topBar)
+
+    local minBtn = Btn({
+        Size = UDim2.new(0, 28, 0, 28),
+        Position = UDim2.new(1, -64, 0.5, -14),
+        Text = "—",
+        BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+        TextSize = 14,
+    }, topBar)
+    Corner(6, minBtn)
+
+    local closeBtn = Btn({
+        Size = UDim2.new(0, 28, 0, 28),
+        Position = UDim2.new(1, -32, 0.5, -14),
+        Text = "✕",
+        BackgroundColor3 = Color3.fromRGB(190, 45, 45),
+        TextSize = 13,
+    }, topBar)
+    Corner(6, closeBtn)
+
+    closeBtn.MouseButton1Click:Connect(function()
+        CleanupAll()
+        gui:Destroy()
+    end)
+
+    local minimized = false
+    minBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        main.Size = minimized and UDim2.new(0, 640, 0, 40) or UDim2.new(0, 640, 0, 460)
+    end)
+
+    local dragStart, dragPos
+    topBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragStart = input.Position
+            dragPos = main.Position
+        end
+    end)
+    topBar.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement and dragStart then
+            local delta = input.Position - dragStart
+            main.Position = UDim2.new(dragPos.X.Scale, dragPos.X.Offset + delta.X, dragPos.Y.Scale, dragPos.Y.Offset + delta.Y)
+        end
+    end)
+    topBar.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragStart = nil
+        end
+    end)
+
+    local sidebar = Frame({
+        Size = UDim2.new(0, 115, 1, -52),
+        Position = UDim2.new(0, 8, 0, 44),
+        BackgroundColor3 = BG_DARK,
+    }, main)
+    Corner(8, sidebar)
+    Padding(8, 8, 6, 6, sidebar)
+    ListLayout(Enum.FillDirection.Vertical, 4, sidebar)
+
+    local contentHost = Frame({
+        Size = UDim2.new(1, -135, 1, -52),
+        Position = UDim2.new(0, 127, 0, 44),
+        BackgroundColor3 = BG_MID,
+    }, main)
+    Corner(8, contentHost)
+
+    local activeTab = nil
+    local activeBtn = nil
+
+    local tabDefs = {
+        {name = "Home",    icon = "🏠"},
+        {name = "Player",  icon = "👤"},
+        {name = "Speed",   icon = "⚡"},
+        {name = "Farm",    icon = "🥚"},
+        {name = "Visuals", icon = "👁"},
+        {name = "Misc",    icon = "🔧"},
+    }
+
+    local pages = {}
+
+    for _, def in ipairs(tabDefs) do
+        local page = Frame({
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Visible = false,
+        }, contentHost)
+
+        local scroll = Create("ScrollingFrame", {
+            Size = UDim2.new(1, -8, 1, -8),
+            Position = UDim2.new(0, 4, 0, 4),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ScrollBarThickness = 3,
+            ScrollBarImageColor3 = ACCENT,
+            CanvasSize = UDim2.new(0, 0, 0, 0),
+            AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        }, page)
+        ListLayout(Enum.FillDirection.Vertical, 6, scroll)
+        Padding(6, 6, 6, 6, scroll)
+
+        local tabBtn = Btn({
+            Size = UDim2.new(1, 0, 0, 34),
+            BackgroundColor3 = BG_MID,
+            Text = def.icon .. "  " .. def.name,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Font = Enum.Font.GothamBold,
+            TextSize = 13,
+            LayoutOrder = def.index or 1,
+        }, sidebar)
+        Corner(6, tabBtn)
+        Padding(0, 0, 10, 0, tabBtn)
+
+        local indicator = Frame({
+            Size = UDim2.new(0, 3, 0.55, 0),
+            Position = UDim2.new(0, 0, 0.225, 0),
+            BackgroundColor3 = ACCENT,
+            Visible = false,
+        }, tabBtn)
+        Corner(2, indicator)
+
+        tabBtn.MouseButton1Click:Connect(function()
+            if activeTab then activeTab.Visible = false end
+            if activeBtn then
+                activeBtn.BackgroundColor3 = BG_MID
+                local ind = activeBtn:FindFirstChildOfClass("Frame")
+                if ind then ind.Visible = false end
+            end
+            page.Visible = true
+            tabBtn.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
+            indicator.Visible = true
+            activeTab = page
+            activeBtn = tabBtn
+        end)
+
+        pages[def.name] = {scroll = scroll, btn = tabBtn}
+    end
+
+    local function SectionHead(parent, text)
+        local f = Frame({
+            Size = UDim2.new(1, 0, 0, 26),
+            BackgroundTransparency = 1,
+            LayoutOrder = 0,
+        }, parent)
+        local l = Label({
+            Size = UDim2.new(1, 0, 1, 0),
+            Text = text,
+            Font = Enum.Font.GothamBold,
+            TextSize = 11,
+            TextColor3 = ACCENT,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, f)
+        Padding(0, 0, 4, 0, l)
+        return f
+    end
+
+    local function Toggle(parent, label, default, cb)
+        local row = Frame({
+            Size = UDim2.new(1, 0, 0, 40),
+            BackgroundColor3 = BG_LIGHT,
+        }, parent)
+        Corner(7, row)
+
+        Label({
+            Size = UDim2.new(1, -72, 1, 0),
+            Position = UDim2.new(0, 12, 0, 0),
+            Text = label,
+            TextSize = 13,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, row)
+
+        local pill = Frame({
+            Size = UDim2.new(0, 44, 0, 22),
+            Position = UDim2.new(1, -54, 0.5, -11),
+            BackgroundColor3 = default and ACCENT or Color3.fromRGB(50, 50, 50),
+        }, row)
+        Corner(11, pill)
+
+        local knob = Frame({
+            Size = UDim2.new(0, 16, 0, 16),
+            Position = default and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
+            BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+        }, pill)
+        Corner(8, knob)
+
+        local clickRegion = Create("TextButton", {
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Text = "",
+        }, row)
+
+        local enabled = default
+        clickRegion.MouseButton1Click:Connect(function()
+            enabled = not enabled
+            pill.BackgroundColor3 = enabled and ACCENT or Color3.fromRGB(50, 50, 50)
+            knob.Position = enabled and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+            cb(enabled)
+        end)
+
+        if default then cb(true) end
+    end
+
+    local function ActionBtn(parent, label, cb)
+        local btn = Btn({
+            Size = UDim2.new(1, 0, 0, 38),
+            BackgroundColor3 = BG_LIGHT,
+            Text = "  " .. label,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Font = Enum.Font.Gotham,
+            TextSize = 13,
+        }, parent, cb)
+        Corner(7, btn)
+
+        Label({
+            Size = UDim2.new(0, 24, 1, 0),
+            Position = UDim2.new(1, -30, 0, 0),
+            Text = "›",
+            Font = Enum.Font.GothamBold,
+            TextSize = 16,
+            TextColor3 = ACCENT,
+            TextXAlignment = Enum.TextXAlignment.Center,
+        }, btn)
+
+        return btn
+    end
+
+    local function Slider(parent, label, minV, maxV, defV, cb)
+        local container = Frame({
+            Size = UDim2.new(1, 0, 0, 62),
+            BackgroundColor3 = BG_LIGHT,
+        }, parent)
+        Corner(7, container)
+
+        Label({
+            Size = UDim2.new(1, -64, 0, 26),
+            Position = UDim2.new(0, 12, 0, 6),
+            Text = label,
+            TextSize = 13,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, container)
+
+        local valLbl = Label({
+            Size = UDim2.new(0, 52, 0, 26),
+            Position = UDim2.new(1, -58, 0, 6),
+            Text = tostring(defV),
+            Font = Enum.Font.GothamBold,
+            TextSize = 13,
+            TextColor3 = ACCENT,
+            TextXAlignment = Enum.TextXAlignment.Right,
+        }, container)
+
+        local track = Frame({
+            Size = UDim2.new(1, -24, 0, 5),
+            Position = UDim2.new(0, 12, 0, 44),
+            BackgroundColor3 = Color3.fromRGB(45, 45, 45),
+        }, container)
+        Corner(3, track)
+
+        local pct = (defV - minV) / (maxV - minV)
+        local fill = Frame({
+            Size = UDim2.new(pct, 0, 1, 0),
+            BackgroundColor3 = ACCENT,
+        }, track)
+        Corner(3, fill)
+
+        local thumb = Frame({
+            Size = UDim2.new(0, 13, 0, 13),
+            Position = UDim2.new(pct, -6, 0.5, -6),
+            BackgroundColor3 = Color3.fromRGB(240, 240, 240),
+            ZIndex = 3,
+        }, track)
+        Corner(7, thumb)
+
+        local dragging = false
+        local conns = {}
+
+        local function applyX(x)
+            local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+            local val = math.floor(minV + (maxV - minV) * rel + 0.5)
+            fill.Size = UDim2.new(rel, 0, 1, 0)
+            thumb.Position = UDim2.new(rel, -6, 0.5, -6)
+            valLbl.Text = tostring(val)
+            cb(val)
+        end
+
+        local thumbConn = thumb.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true end
+        end)
+        table.insert(conns, thumbConn)
+
+        local endedConn = UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+        table.insert(conns, endedConn)
+
+        local changedConn = UIS.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                applyX(i.Position.X)
+            end
+        end)
+        table.insert(conns, changedConn)
+
+        local trackConn = track.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                applyX(i.Position.X)
+            end
+        end)
+        table.insert(conns, trackConn)
+
+        for _, c in ipairs(conns) do
+            table.insert(state.sliderConnections, c)
+        end
+
+        cb(defV)
+    end
+
+    do
+        local s = pages["Home"].scroll
+        SectionHead(s, "Welcome to Rivo Hub")
+        ActionBtn(s, "Test Notification", function()
+            Notify("Rivo Hub", "Script is working.", 3)
+        end)
+        ActionBtn(s, "Copy Discord Link", function()
+            local cb = setclipboard or toclipboard or (rawget(_G, "set_clipboard"))
+            if cb then pcall(cb, DISCORD) end
+            Notify("Discord", "Link copied!", 2)
+        end)
+        ActionBtn(s, "Print Player Info", function()
+            local h = GetHumanoid()
+            if h then
+                print("[Rivo] Name:", LP.Name, "| HP:", h.Health, "/ ", h.MaxHealth, "| Speed:", h.WalkSpeed)
+                Notify("Info", "Check console F9", 3)
+            end
+        end)
+        ActionBtn(s, "Print Workspace Contents", function()
+            for _, v in ipairs(workspace:GetChildren()) do
+                print("[Rivo WS]", v.ClassName, v.Name)
+            end
+            Notify("Workspace", "Check F9", 3)
+        end)
+        pages["Home"].btn.MouseButton1Click:Fire()
+    end
+
+    do
+        local s = pages["Player"].scroll
+
+        SectionHead(s, "Movement")
+
+        Toggle(s, "Noclip", false, function(v)
+            if state.noclipConn then
+                state.noclipConn:Disconnect()
+                state.noclipConn = nil
+            end
+            if v then
+                state.noclipConn = RunService.Stepped:Connect(function()
+                    local c = LP.Character
+                    if not c then return end
+                    for _, p in ipairs(c:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            p.CanCollide = false
+                        end
+                    end
+                end)
+            end
+        end)
+
+        Toggle(s, "Fly", false, function(v)
+            StopFly()
+            if not v then return end
+            local r = GetRoot()
+            if not r then
+                Notify("Fly", "No character found", 2)
+                return
+            end
+
+            local bv = Instance.new("BodyVelocity")
+            bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+            bv.Velocity = Vector3.zero
+            bv.Parent = r
+            state.flyBV = bv
+
+            local bg = Instance.new("BodyGyro")
+            bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+            bg.P = 1e6
+            bg.Parent = r
+            state.flyGyro = bg
+
+            state.flyConn = RunService.RenderStepped:Connect(function()
+                local root = GetRoot()
+                if not root then
+                    StopFly()
+                    return
+                end
+                local cam = workspace.CurrentCamera
+                local dir = Vector3.zero
+                local spd = state.walkSpeed
+                if UIS:IsKeyDown(Enum.KeyCode.W) then dir += cam.CFrame.LookVector end
+                if UIS:IsKeyDown(Enum.KeyCode.S) then dir -= cam.CFrame.LookVector end
+                if UIS:IsKeyDown(Enum.KeyCode.A) then dir -= cam.CFrame.RightVector end
+                if UIS:IsKeyDown(Enum.KeyCode.D) then dir += cam.CFrame.RightVector end
+                if UIS:IsKeyDown(Enum.KeyCode.Space) then dir += Vector3.new(0, 1, 0) end
+                if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then dir -= Vector3.new(0, 1, 0) end
+                bv.Velocity = dir.Magnitude > 0 and (dir.Unit * spd) or Vector3.zero
+                bg.CFrame = cam.CFrame
+            end)
+        end)
+
+        Toggle(s, "Infinite Jump", false, function(v)
+            if state.infJumpConn then
+                state.infJumpConn:Disconnect()
+                state.infJumpConn = nil
+            end
+            if v then
+                state.infJumpConn = UIS.JumpRequest:Connect(function()
+                    local h = GetHumanoid()
+                    if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+                end)
+            end
+        end)
+
+        SectionHead(s, "Actions")
+
+        ActionBtn(s, "Respawn Character", function()
+            LP:LoadCharacter()
+        end)
+
+        ActionBtn(s, "Teleport to Spawn", function()
+            local r = GetRoot()
+            if not r then return end
+            local sp = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
+            if sp then
+                r.CFrame = sp.CFrame + Vector3.new(0, 5, 0)
+                Notify("Teleport", "At spawn", 2)
+            else
+                Notify("Teleport", "No spawn location found", 2)
+            end
+        end)
+
+        ActionBtn(s, "Sit Toggle", function()
+            local h = GetHumanoid()
+            if h then h.Sit = not h.Sit end
+        end)
+
+        ActionBtn(s, "Reset Character", function()
+            local h = GetHumanoid()
+            if h then h.Health = 0 end
+        end)
+    end
+
+    do
+        local s = pages["Speed"].scroll
+
+        SectionHead(s, "Walk Speed")
+        Slider(s, "Walk Speed", 16, 300, 16, function(v)
+            state.walkSpeed = v
+            local h = GetHumanoid()
+            if h then h.WalkSpeed = v end
+        end)
+
+        SectionHead(s, "Jump Power")
+        Slider(s, "Jump Power", 50, 350, 50, function(v)
+            state.jumpPower = v
+            local h = GetHumanoid()
+            if h then h.JumpPower = v end
+        end)
+
+        ActionBtn(s, "Reset Defaults (16 / 50)", function()
+            state.walkSpeed = 16
+            state.jumpPower = 50
+            local h = GetHumanoid()
+            if h then
+                h.WalkSpeed = 16
+                h.JumpPower = 50
+            end
+            Notify("Speed", "Reset to defaults", 2)
+        end)
+
+        ActionBtn(s, "Speed Boost ×2", function()
+            state.walkSpeed = math.min(state.walkSpeed * 2, 300)
+            local h = GetHumanoid()
+            if h then h.WalkSpeed = state.walkSpeed end
+            Notify("Speed", "×2 → " .. state.walkSpeed, 2)
+        end)
+
+        ActionBtn(s, "Max Speed (300)", function()
+            state.walkSpeed = 300
+            local h = GetHumanoid()
+            if h then h.WalkSpeed = 300 end
+            Notify("Speed", "Max speed applied", 2)
+        end)
+    end
+
+    do
+        local s = pages["Farm"].scroll
+
+        SectionHead(s, "Egg Tools")
+
+        ActionBtn(s, "Find Nearest Egg", function()
+            local r = GetRoot()
+            if not r then
+                Notify("Farm", "No character", 2)
+                return
+            end
+            local nearest, best = nil, math.huge
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("BasePart") and obj.Name:lower():find("egg") then
+                    local d = (obj.Position - r.Position).Magnitude
+                    if d < best then best = d; nearest = obj end
+                end
+            end
+            if nearest then
+                Notify("Farm", nearest.Name .. " — " .. math.floor(best) .. " studs", 4)
+            else
+                Notify("Farm", "No eggs in workspace", 3)
+            end
+        end)
+
+        ActionBtn(s, "Teleport to Nearest Egg", function()
+            local r = GetRoot()
+            if not r then return end
+            local nearest, best = nil, math.huge
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("BasePart") and obj.Name:lower():find("egg") then
+                    local d = (obj.Position - r.Position).Magnitude
+                    if d < best then best = d; nearest = obj end
+                end
+            end
+            if nearest then
+                r.CFrame = nearest.CFrame + Vector3.new(0, 5, 0)
+                Notify("Farm", "Teleported to " .. nearest.Name, 2)
+            else
+                Notify("Farm", "No egg found", 2)
+            end
+        end)
+
+        ActionBtn(s, "Count Nearby Drops (150 studs)", function()
+            local r = GetRoot()
+            if not r then return end
+            local count = 0
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("BasePart") and obj.Name:lower():find("drop") then
+                    if (obj.Position - r.Position).Magnitude <= 150 then
+                        count += 1
+                    end
+                end
+            end
+            Notify("Farm", "Drops in range: " .. count, 3)
+        end)
+
+        ActionBtn(s, "Collect All Nearby Drops", function()
+            local r = GetRoot()
+            if not r then return end
+            local collected = 0
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("BasePart") and obj.Name:lower():find("drop") then
+                    if (obj.Position - r.Position).Magnitude <= 200 then
+                        r.CFrame = obj.CFrame + Vector3.new(0, 2, 0)
+                        task.wait(0.04)
+                        collected += 1
+                    end
+                end
+            end
+            Notify("Farm", "Collected: " .. collected, 3)
+        end)
+
+        ActionBtn(s, "List All Eggs in Workspace", function()
+            local count = 0
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj.Name:lower():find("egg") then
+                    print("[Rivo Egg]", obj.Name, obj.ClassName)
+                    count += 1
+                end
+            end
+            Notify("Farm", "Found " .. count .. " egg objects — F9", 3)
+        end)
+    end
+
+    do
+        local s = pages["Visuals"].scroll
+
+        SectionHead(s, "ESP")
+
+        local playerEspConn = nil
+        Toggle(s, "Player ESP", false, function(v)
+            ClearESP()
+            if playerEspConn then
+                playerEspConn:Disconnect()
+                playerEspConn = nil
+            end
+            if not v then return end
+
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LP and plr.Character then
+                    AddESP(plr.Character, Color3.fromRGB(255, 75, 75))
+                end
+            end
+            playerEspConn = Players.PlayerAdded:Connect(function(plr)
+                plr.CharacterAdded:Connect(function(char)
+                    task.wait(1)
+                    if v then
+                        AddESP(char, Color3.fromRGB(255, 75, 75))
+                    end
+                end)
+            end)
+            table.insert(state.espConnections, playerEspConn)
+        end)
+
+        local eggEspConn = nil
+        Toggle(s, "Egg ESP", false, function(v)
+            ClearESP()
+            if eggEspConn then
+                eggEspConn:Disconnect()
+                eggEspConn = nil
+            end
+            if not v then return end
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj.Name:lower():find("egg") then
+                    local target = obj:IsA("Model") and obj or (obj:IsA("BasePart") and obj.Parent)
+                    if target then AddESP(target, Color3.fromRGB(255, 215, 40)) end
+                end
+            end
+            eggEspConn = workspace.DescendantAdded:Connect(function(obj)
+                if obj.Name:lower():find("egg") then
+                    local target = obj:IsA("Model") and obj or (obj:IsA("BasePart") and obj.Parent)
+                    if target then AddESP(target, Color3.fromRGB(255, 215, 40)) end
+                end
+            end)
+            table.insert(state.espConnections, eggEspConn)
+        end)
+
+        local dropEspConn = nil
+        Toggle(s, "Drop ESP", false, function(v)
+            ClearESP()
+            if dropEspConn then
+                dropEspConn:Disconnect()
+                dropEspConn = nil
+            end
+            if not v then return end
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj.Name:lower():find("drop") then
+                    local target = obj:IsA("Model") and obj or (obj:IsA("BasePart") and obj.Parent)
+                    if target then AddESP(target, Color3.fromRGB(60, 200, 255)) end
+                end
+            end
+            dropEspConn = workspace.DescendantAdded:Connect(function(obj)
+                if obj.Name:lower():find("drop") then
+                    local target = obj:IsA("Model") and obj or (obj:IsA("BasePart") and obj.Parent)
+                    if target then AddESP(target, Color3.fromRGB(60, 200, 255)) end
+                end
+            end)
+            table.insert(state.espConnections, dropEspConn)
+        end)
+
+        ActionBtn(s, "Clear All ESP", ClearESP)
+
+        SectionHead(s, "Rendering")
+
+        Toggle(s, "Fullbright", false, function(v)
+            if v then
+                state.fullbrightOn = true
+                Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+                Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+                Lighting.Brightness = 2
+                Lighting.GlobalShadows = false
+                for _, obj in ipairs(Lighting:GetChildren()) do
+                    if obj:IsA("BlurEffect") or obj:IsA("ColorCorrectionEffect")
+                    or obj:IsA("SunRaysEffect") or obj:IsA("Atmosphere") then
+                        pcall(function() obj.Enabled = false end)
+                    end
+                end
+            else
+                state.fullbrightOn = false
+                ResetLighting()
+                if state.removeFogOn then
+                    Lighting.FogEnd = 1e9
+                    Lighting.FogStart = 9e8
+                end
+                if state.noShadowsOn then
+                    Lighting.GlobalShadows = false
+                end
+            end
+        end)
+
+        Toggle(s, "Remove Fog", false, function(v)
+            state.removeFogOn = v
+            Lighting.FogEnd = v and 1e9 or state.lightingOriginal.FogEnd
+            Lighting.FogStart = v and 9e8 or state.lightingOriginal.FogStart
+        end)
+
+        Toggle(s, "No Shadows", false, function(v)
+            state.noShadowsOn = v
+            Lighting.GlobalShadows = not v
+        end)
+    end
+
+    do
+        local s = pages["Misc"].scroll
+
+        SectionHead(s, "Utility")
+
+        Toggle(s, "Anti-AFK", false, function(v)
+            if state.antiAfkConn then
+                state.antiAfkConn:Disconnect()
+                state.antiAfkConn = nil
+            end
+            if v and VirtualUser then
+                state.antiAfkConn = RunService.Heartbeat:Connect(function()
+                    pcall(function()
+                        VirtualUser:CaptureController()
+                        VirtualUser:ClickButton2(Vector2.new())
+                    end)
+                end)
+            elseif v and not VirtualUser then
+                Notify("Anti-AFK", "VirtualUser not available", 2)
+            end
+        end)
+
+        ActionBtn(s, "Rejoin Server", function()
+            pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
+            end)
+        end)
+
+        ActionBtn(s, "Print All Players", function()
+            for _, p in ipairs(Players:GetPlayers()) do
+                print("[Rivo Player]", p.Name, "|", p.DisplayName, "| UserId:", p.UserId)
+            end
+            Notify("Players", "Listed in F9 console", 3)
+        end)
+
+        ActionBtn(s, "Get Game Info", function()
+            print("[Rivo Game] PlaceId:", game.PlaceId, "| JobId:", game.JobId)
+            Notify("Game", "PlaceId: " .. game.PlaceId, 3)
+        end)
+
+        ActionBtn(s, "Copy Discord Link", function()
+            local cb = setclipboard or toclipboard or (rawget(_G, "set_clipboard"))
+            if cb then pcall(cb, DISCORD) end
+            Notify("Discord", "Copied!", 2)
+        end)
+
+        SectionHead(s, "System")
+
+        ActionBtn(s, "Unload Rivo Hub", function()
+            CleanupAll()
+            gui:Destroy()
+        end)
+    end
+
+    state.toggleConn = UIS.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.RightShift then
+            main.Visible = not main.Visible
+        end
+    end)
+
+    state.charAddedConn = LP.CharacterAdded:Connect(function(char)
+        task.wait(1.5)
+        local h = char:FindFirstChildOfClass("Humanoid")
+        if h then
+            h.WalkSpeed = state.walkSpeed
+            h.JumpPower = state.jumpPower
+        end
+    end)
+
+    Notify("Rivo Hub", "Loaded  —  RightShift to toggle", 4)
+end
+
+ShowKeyGui(function()
+    task.wait(0.15)
+    CreateMainUI()
+end)
